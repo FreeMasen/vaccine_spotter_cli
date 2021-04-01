@@ -1,0 +1,21 @@
+[package]
+name = "vaccine_spotter"
+version = "0.1.0"
+authors = ["Robert Masen <robert.masen@smartthings.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+reqwest = {version = "0.11", features = ["rustls-tls", "json"], default-features = false}
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+lettre = { version = "0.10.0-beta.3", optional = true, default-features = false, features = ["smtp-transport", "hostname", "r2d2", "builder", "rustls-tls"] }
+structopt = "0.3"
+
+
+[features]
+default = []
+email-notifications = ["lettre"]
