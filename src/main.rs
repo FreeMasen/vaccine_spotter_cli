@@ -1,11 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
+use chrono::{Date, DateTime, Local};
 use structopt::StructOpt;
 
 use serde::Deserialize;
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
 
-#[derive(StructOpt)]
+#[derive(StructOpt, Debug)]
 struct Args {
     #[structopt(short, long)]
     /// The path to a json file containing an array of strings representing
@@ -24,7 +25,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> R<()> {
+    pretty_env_logger::init();
     let args = Args::from_args();
+    log::debug!("starting with args: {:?}", args);
     let mut current_info: HashMap<u64, Vec<Appointment>> = HashMap::new();
     let zips = fetch_considered_zips(&args.zips_path);
     loop {
@@ -34,7 +37,16 @@ async fn main() -> R<()> {
         ))
         .await
         {
-            let res: Response = res.json().await?;
+            log::info!("requesting new appointments");
+            let res: Response = match res.json().await {
+                Ok(res) => res,
+                Err(e) => {
+                    log::error!("Failed to request new appointments: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    continue;
+                }
+            };
+            log::info!("new appoints received");
             report_locations(
                 &res.features,
                 &current_info,
@@ -96,7 +108,7 @@ fn print_locations(
     for entry in locations {
         if let Some(appointments) = &entry.properties.appointments {
             if let Some(info) = current_info.get(&entry.properties.id) {
-                if appointments != info && !appointments.is_empty() {
+                if contains_new_appts(appointments, info) {
                     if let Some(zip) = &entry.properties.postal_code {
                         if zips.is_empty() || zips.contains(zip) {
                             if !printed_preamble {
@@ -126,6 +138,15 @@ fn print_locations(
     }
 }
 
+fn contains_new_appts(new: &[Appointment], old: &[Appointment]) -> bool {
+    for appt in new {
+        if !old.contains(appt) {
+            return true
+        }
+    }
+    false
+}
+
 fn print_location(props: &Properties) {
     println!("{}", "+".repeat(10));
     println!("{}", props);
@@ -151,7 +172,7 @@ fn email_locations(
     for entry in locations {
         if let Some(appointments) = &entry.properties.appointments {
             if let Some(info) = current_info.get(&entry.properties.id) {
-                if appointments != info {
+                if contains_new_appts(appointments, info) {
                     if let Some(zip) = &entry.properties.postal_code {
                         if zips.is_empty() || zips.contains(zip) {
                             send = true;
@@ -256,11 +277,23 @@ impl std::fmt::Display for Properties {
             string_or_question(&self.postal_code)
         )?;
         if let Some(apts) = &self.appointments {
-            for (i, apt) in apts.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
+            let sorted: HashMap<Date<Local>, Vec<DateTime<Local>>> = apts.iter().fold(std::collections::HashMap::new(), |mut acc, apt| {
+                acc.entry(apt.time.date())
+                    .and_modify(|v| v.push(apt.time))
+                    .or_insert(vec![apt.time]);
+                acc
+            });
+            let mut keys: Vec<Date<Local>> = sorted.keys().cloned().collect();
+            keys.sort();
+            for key in keys {
+                write!(f, "{}", key.format("%m/%d/%Y: "))?;
+                for (i, time) in sorted[&key].iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", time.format("%I:%M%P"))?;
                 }
-                write!(f, "{}", apt.time)?;
+                writeln!(f, "")?;
             }
         }
         writeln!(f, "")
@@ -277,11 +310,11 @@ fn string_or_question(o: &Option<String>) -> &str {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct Appointment {
-    time: String,
+    time: DateTime<Local>,
 }
 
-impl PartialEq<str> for Appointment {
-    fn eq(&self, other: &str) -> bool {
-        self.time == other
+impl PartialEq<DateTime<Local>> for Appointment {
+    fn eq(&self, other: &DateTime<Local>) -> bool {
+        self.time == *other
     }
 }
